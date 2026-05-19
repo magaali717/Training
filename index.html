@@ -1,0 +1,1591 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#18181b">
+  <title>Упражнения — план и прогресс</title>
+  <style>
+    :root {
+      --bg: #18181b; --surface: #27272a; --surface2: #3f3f46;
+      --accent: #a78bfa; --accent-dim: rgba(167,139,250,.15);
+      --done: #22c55e; --text: #fafafa; --muted: #a1a1aa;
+      --nav-h: 60px; --safe-b: env(safe-area-inset-bottom, 0px);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: calc(var(--nav-h) + var(--safe-b)); }
+    button { font: inherit; cursor: pointer; }
+
+    /* ——— Top bar ——— */
+    .topbar {
+      position: sticky; top: 0; z-index: 20;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: .75rem 1rem; background: var(--bg); border-bottom: 1px solid #3f3f46;
+    }
+    .topbar > div:first-child { min-width: 0; flex: 1; }
+    .topbar h1 { font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .topbar-stats { font-size: .75rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* ——— Views ——— */
+    [hidden] { display: none !important; }
+    .view { display: none; padding: 1rem; }
+    .view.active { display: block; }
+    @media (min-width: 901px) {
+      body { padding-bottom: 0; display: grid; grid-template-rows: auto 1fr; }
+      .bottom-nav { display: none; }
+      .desktop-shell { display: grid; grid-template-columns: 1fr 340px; min-height: calc(100vh - 52px); }
+      .view-plan { display: block !important; padding: 0; }
+      .view-edit { display: block !important; position: sticky; top: 52px; height: calc(100vh - 52px); overflow-y: auto; }
+      .view-progress { display: none !important; }
+      .view-progress.desktop-show { display: block !important; grid-column: 1 / -1; padding: 1.5rem; }
+      .mobile-only { display: none !important; }
+      .hide-desktop { display: none !important; }
+    }
+    @media (max-width: 900px) {
+      .desktop-shell { display: block; }
+      .sidebar-panel { border: none; padding: 0; background: transparent; }
+      .hide-mobile { display: none !important; }
+      .backup-details > summary { font-size: .9rem; font-weight: 600; cursor: pointer; padding: .35rem 0; list-style: none; }
+      .backup-details > summary::-webkit-details-marker { display: none; }
+      .backup-details > summary::before { content: '▸ '; color: var(--muted); }
+      .backup-details[open] > summary::before { content: '▾ '; }
+      /* План на весь экран; прогресс/редактор — слайд поверх, не столбиком снизу */
+      .desktop-shell > .view-plan {
+        display: block !important;
+        padding: 0;
+      }
+      .desktop-shell > #viewProgress,
+      .desktop-shell > #viewEdit {
+        position: fixed !important;
+        top: 52px;
+        left: 0;
+        right: 0;
+        bottom: calc(var(--nav-h) + var(--safe-b));
+        z-index: 40;
+        margin: 0 !important;
+        padding: 1rem !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch;
+        background: var(--bg);
+        display: block !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+        transform: translateX(100%);
+      }
+      .desktop-shell > #viewProgress.mobile-tab-visible,
+      .desktop-shell > #viewEdit.mobile-tab-visible {
+        visibility: visible !important;
+        pointer-events: auto !important;
+        transform: translateX(0);
+      }
+      .editor-more { margin-top: 1rem; border-top: 1px solid #3f3f46; padding-top: .75rem; }
+      .editor-more > summary { font-size: .9rem; color: var(--muted); cursor: pointer; list-style: none; }
+      .editor-more > summary::-webkit-details-marker { display: none; }
+    }
+    body.mobile-ui { padding-bottom: calc(var(--nav-h) + var(--safe-b)); }
+
+    /* ——— Progress bar ——— */
+    .progress-bar { height: 6px; background: var(--surface); border-radius: 3px; margin: 0 1rem 1rem; overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--done)); transition: width .3s; }
+
+    /* ——— Day picker (mobile) ——— */
+    .day-picker {
+      display: flex; gap: .35rem; overflow-x: auto; padding: 0 1rem 1rem;
+      scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch;
+    }
+    .day-picker::-webkit-scrollbar { display: none; }
+    .day-chip {
+      flex: 0 0 auto; scroll-snap-align: start;
+      padding: .45rem .85rem; border-radius: 999px; border: 1px solid #52525b;
+      background: var(--surface); color: var(--muted); font-size: .8rem; white-space: nowrap;
+    }
+    .day-chip.active { background: var(--accent); color: #18181b; border-color: var(--accent); font-weight: 600; }
+    .day-chip.today:not(.active) { border-color: var(--accent); color: var(--accent); }
+
+    /* ——— Columns (desktop) / single day (mobile) ——— */
+    .columns-wrap { overflow-x: auto; padding: 0 1rem 1rem; }
+  @media (min-width: 901px) {
+      .columns-wrap { padding: 1.25rem; }
+    }
+    .columns {
+      display: grid; gap: .75rem; min-width: 0; width: 100%;
+    }
+    @media (min-width: 901px) {
+      .columns { grid-template-columns: repeat(7, minmax(130px, 1fr)); min-width: 900px; }
+    }
+    .column { background: var(--surface); border-radius: 12px; padding: .75rem; min-height: 200px; min-width: 0; overflow: hidden; }
+    @media (max-width: 900px) {
+      .column { display: none; min-height: auto; }
+      .column.active-day { display: block; }
+    }
+    .column h3 { font-size: .75rem; color: var(--muted); margin-bottom: .5rem; text-transform: uppercase; letter-spacing: .05em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .column.today { outline: 2px solid var(--accent); }
+    .ex-item {
+      background: var(--surface2); padding: .65rem .75rem; border-radius: 10px;
+      margin-bottom: .5rem; font-size: .875rem; touch-action: manipulation;
+      min-width: 0; overflow: hidden; word-break: break-word; overflow-wrap: anywhere;
+    }
+    .ex-item.selected { outline: 2px solid var(--accent); background: var(--accent-dim); }
+    .ex-item.done { opacity: .55; border-left: 3px solid var(--done); }
+    .ex-item strong { display: block; margin-bottom: .15rem; line-height: 1.3; hyphens: auto; }
+    .ex-item small { display: block; color: var(--muted); font-size: .7rem; line-height: 1.35; word-break: break-word; overflow-wrap: anywhere; }
+    .add-mini {
+      width: 100%; padding: .5rem; border: 1px dashed #52525b; background: transparent;
+      color: var(--muted); border-radius: 8px; font-size: .8rem; margin-top: .25rem;
+    }
+
+    /* ——— Sidebar / editor ——— */
+    .sidebar-panel {
+      background: var(--surface); border-left: 1px solid #3f3f46;
+      padding: 1.25rem; overflow-y: auto;
+    }
+    .sidebar-panel h2 { font-size: 1rem; margin-bottom: .5rem; }
+    .hint { font-size: .75rem; color: var(--muted); margin-bottom: 1rem; word-break: break-word; overflow-wrap: anywhere; line-height: 1.4; }
+    .form-group { margin-bottom: .75rem; }
+    .form-group label { font-size: .7rem; color: var(--muted); display: block; margin-bottom: .25rem; }
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%; padding: .55rem; border-radius: 8px; border: 1px solid #52525b;
+      background: var(--bg); color: var(--text); font: inherit; font-size: 16px;
+    }
+    .form-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+    .form-row3 > div { min-width: 0; }
+    .btn-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+    .btn { flex: 1 1 auto; min-width: 0; padding: .6rem .5rem; border: none; border-radius: 8px; font-size: .8rem; white-space: normal; line-height: 1.25; text-align: center; }
+    .btn-primary { background: var(--accent); color: #18181b; font-weight: 600; }
+    .btn-secondary { background: var(--surface2); color: var(--text); }
+    .btn-danger { background: #7f1d1d; color: #fecaca; flex: 0 1 auto; }
+    .btn-log { background: #14532d; color: #bbf7d0; }
+    .templates { margin-top: 1.25rem; }
+    .tpl {
+      display: block; width: 100%; text-align: left; padding: .55rem .75rem; margin-bottom: .35rem;
+      background: var(--bg); border: 1px solid #52525b; border-radius: 8px; color: var(--text); font-size: .8rem;
+      word-break: break-word; overflow-wrap: anywhere;
+    }
+    .tpl:active { border-color: var(--accent); }
+
+    .backup-section { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #3f3f46; }
+    .backup-section h2 { font-size: .9rem; margin-bottom: .5rem; }
+    .backup-status { font-size: .7rem; color: var(--muted); margin: .5rem 0; line-height: 1.4; word-break: break-word; }
+    .backup-section label.check { display: flex; align-items: flex-start; gap: .5rem; font-size: .75rem; color: var(--muted); margin: .5rem 0; cursor: pointer; }
+    .backup-section label.check input { width: auto; margin-top: .15rem; flex-shrink: 0; }
+    .btn-backup { background: #312e81; color: #c4b5fd; width: 100%; margin-bottom: .35rem; }
+    .btn-backup:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ——— Progress / chart view ——— */
+    .chart-card {
+      background: var(--surface); border-radius: 16px; padding: 1rem; margin-bottom: 1rem;
+      min-width: 0; overflow: hidden;
+    }
+    #chartSummary { word-break: break-word; overflow-wrap: anywhere; }
+    .chart-controls { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
+    .chart-controls select {
+      flex: 1 1 100%; min-width: 0; max-width: 100%; padding: .5rem; border-radius: 8px;
+      border: 1px solid #52525b; background: var(--bg); color: var(--text); font: inherit;
+      text-overflow: ellipsis;
+    }
+    .metric-tabs { display: flex; gap: .35rem; flex-wrap: wrap; width: 100%; }
+    .metric-tab {
+      flex: 1 1 auto; min-width: 0;
+      padding: .4rem .5rem; border-radius: 8px; border: 1px solid #52525b;
+      background: transparent; color: var(--muted); font-size: .75rem; white-space: nowrap;
+    }
+    .metric-tab.active { background: var(--accent); color: #18181b; border-color: var(--accent); }
+    .chart-wrap { position: relative; width: 100%; height: 220px; }
+    @media (min-width: 901px) { .chart-wrap { height: 280px; } }
+    .overview-chart { margin: 0 1rem 1rem; }
+    @media (min-width: 901px) { .overview-chart { margin: 1rem 1.25rem 0; } }
+    .overview-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-bottom: .5rem; }
+    .overview-head h2 { font-size: .95rem; margin: 0; }
+    .link-btn { background: none; border: none; color: var(--accent); font-size: .75rem; padding: .25rem; flex-shrink: 0; white-space: nowrap; }
+    .chart-wrap--compact { height: 150px; }
+    @media (min-width: 901px) { .chart-wrap--compact { height: 170px; } }
+    .overview-summary { font-size: .75rem; color: var(--muted); margin-top: .5rem; word-break: break-word; }
+    .period-tabs { display: flex; gap: .35rem; margin-bottom: .75rem; flex-wrap: wrap; }
+    .period-tab {
+      padding: .35rem .65rem; border-radius: 8px; border: 1px solid #52525b;
+      background: transparent; color: var(--muted); font-size: .72rem;
+    }
+    .period-tab.active { background: var(--accent); color: #18181b; border-color: var(--accent); }
+    .chart-interactive { position: relative; cursor: crosshair; }
+    .chart-tooltip {
+      position: absolute; z-index: 5; pointer-events: none;
+      transform: translate(-50%, -100%); margin-top: -8px;
+      background: #3f3f46; border: 1px solid #52525b; border-radius: 8px;
+      padding: .45rem .6rem; font-size: .72rem; line-height: 1.4; white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0,0,0,.35);
+    }
+    .chart-tooltip strong { color: var(--accent); }
+    .chart-legend-wrap {
+      margin-bottom: .5rem; border: 1px solid #3f3f46; border-radius: 8px;
+      background: rgba(0,0,0,.15); overflow: hidden;
+    }
+    .chart-legend-wrap summary {
+      padding: .35rem .55rem; font-size: .7rem; color: var(--muted);
+      cursor: pointer; list-style: none; user-select: none;
+    }
+    .chart-legend-wrap summary::-webkit-details-marker { display: none; }
+    .chart-legend-wrap summary::before { content: '▸ '; }
+    .chart-legend-wrap[open] summary::before { content: '▾ '; }
+    .chart-legend {
+      display: flex; flex-wrap: wrap; gap: .2rem .45rem;
+      padding: 0 .5rem .45rem; font-size: .65rem; color: var(--muted);
+      max-height: 4.2rem; overflow-y: auto;
+    }
+    .chart-legend-item {
+      display: inline-flex; align-items: center; gap: .25rem;
+      max-width: 100%; min-width: 0; padding: .1rem .2rem; border-radius: 4px;
+    }
+    .chart-legend-swatch {
+      width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.3);
+    }
+    .chart-legend-label {
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      max-width: 5.5rem;
+    }
+    .chart-legend-item.dimmed { opacity: .35; }
+    .chart-legend-item.active { background: rgba(255,255,255,.06); }
+    .history-item { border-left: 3px solid transparent; padding-left: .5rem; }
+    .ex-item-top { display: flex; align-items: flex-start; gap: .5rem; }
+    .ex-item-text { flex: 1; min-width: 0; }
+    .ex-spark { flex-shrink: 0; display: none; opacity: .85; }
+    .stepper { display: flex; align-items: stretch; width: 100%; }
+    .stepper input {
+      flex: 1 1 3rem; min-width: 3rem; width: 100%; max-width: 100%;
+      text-align: center; border-radius: 0;
+      border: 1px solid #52525b; border-left: none; border-right: none;
+      background: var(--bg); color: var(--text); -webkit-text-fill-color: var(--text);
+      padding: .55rem .2rem; font-size: 16px; font-variant-numeric: tabular-nums;
+      -moz-appearance: textfield; appearance: textfield;
+    }
+    .stepper input::-webkit-outer-spin-button,
+    .stepper input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+    .stepper button {
+      width: 32px; flex-shrink: 0; border: 1px solid #52525b; background: var(--surface2);
+      color: var(--text); font-size: 1.1rem; line-height: 1; padding: 0;
+    }
+    .stepper button:first-child { border-radius: 8px 0 0 8px; }
+    .stepper button:last-child { border-radius: 0 8px 8px 0; }
+    .history-actions { display: flex; gap: .25rem; flex-shrink: 0; }
+    .history-edit {
+      width: 28px; height: 28px; border: none; border-radius: 6px;
+      background: #3f3f46; color: var(--accent); font-size: .85rem; padding: 0;
+    }
+    .history-edit:hover { background: var(--accent-dim); }
+    .history-dlg { border: none; border-radius: 12px; padding: 1.25rem; max-width: 340px; width: 92%;
+      background: var(--surface); color: var(--text); }
+    .history-dlg::backdrop { background: rgba(0,0,0,.55); }
+    .history-dlg h3 { margin-bottom: 1rem; font-size: 1rem; }
+    canvas { width: 100%; height: 100%; display: block; }
+    .chart-empty { text-align: center; color: var(--muted); padding: 3rem 1rem; font-size: .9rem; }
+    .history-list { margin-top: .5rem; }
+    .history-item {
+      display: flex; justify-content: space-between; align-items: flex-start; gap: .5rem;
+      padding: .6rem 0; border-bottom: 1px solid #3f3f46; font-size: .85rem;
+    }
+    .history-item:last-child { border-bottom: none; }
+    .history-item-body { min-width: 0; flex: 1; }
+    .history-item-stats { flex: 0 1 auto; text-align: right; max-width: 38%; min-width: 0; }
+    .history-del {
+      flex-shrink: 0; width: 28px; height: 28px; border: none; border-radius: 6px;
+      background: #3f3f46; color: #fca5a5; font-size: 1.1rem; line-height: 1; padding: 0;
+    }
+    .history-del:hover { background: #7f1d1d; }
+    .history-item strong { display: block; word-break: break-word; overflow-wrap: anywhere; line-height: 1.3; }
+    .history-item span { display: block; color: var(--muted); font-size: .75rem; word-break: break-word; }
+    .delta-up { color: var(--done); font-size: .75rem; }
+    .delta-down { color: #f87171; font-size: .75rem; }
+
+    /* ——— Bottom nav (mobile) ——— */
+    .bottom-nav {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+      display: flex; background: var(--surface); border-top: 1px solid #3f3f46;
+      padding-bottom: var(--safe-b); height: calc(var(--nav-h) + var(--safe-b));
+    }
+    .nav-btn {
+      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: .15rem; border: none; background: transparent; color: var(--muted); font-size: .65rem; padding: .5rem;
+    }
+    .nav-btn svg { width: 22px; height: 22px; }
+    .nav-btn.active { color: var(--accent); }
+
+    /* Desktop: progress toggle in topbar */
+    .topbar-actions { display: flex; gap: .5rem; }
+    .topbar-actions button {
+      padding: .35rem .75rem; border-radius: 8px; border: 1px solid #52525b;
+      background: transparent; color: var(--text); font-size: .8rem;
+    }
+    .topbar-actions button.active { background: var(--accent); color: #18181b; border-color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>💪 Упражнения <span style="font-size:.55rem;color:var(--muted);font-weight:400">m3</span></h1>
+      <div class="topbar-stats" id="weekStats"></div>
+    </div>
+    <div class="topbar-actions hide-mobile">
+      <button id="btnShowPlan" class="active" onclick="setDesktopMode('plan')">План</button>
+      <button id="btnShowProgress" onclick="setDesktopMode('progress')">Прогресс</button>
+    </div>
+  </header>
+
+  <div class="progress-bar hide-mobile" id="progressBarWrap">
+    <div class="progress-fill" id="progressFill" style="width:0%"></div>
+  </div>
+
+  <div class="desktop-shell">
+    <!-- PLAN -->
+    <section class="view view-plan active" id="viewPlan">
+      <div class="chart-card overview-chart">
+        <div class="overview-head">
+          <h2>📈 Общий прогресс</h2>
+          <button type="button" class="link-btn hide-desktop" onclick="switchView('progress')">Подробнее →</button>
+        </div>
+        <div class="period-tabs overview-period">
+          <button type="button" class="period-tab" data-p="4w" onclick="setOverviewPeriod('4w')">4 нед</button>
+          <button type="button" class="period-tab" data-p="3m" onclick="setOverviewPeriod('3m')">3 мес</button>
+          <button type="button" class="period-tab" data-p="all" onclick="setOverviewPeriod('all')">Всё</button>
+        </div>
+        <details class="chart-legend-wrap" id="overviewLegendWrap"><summary>Легенда</summary><div class="chart-legend" id="overviewLegend"></div></details>
+        <div class="chart-wrap chart-wrap--compact chart-interactive" id="overviewChartWrap"></div>
+        <p class="overview-summary" id="overviewSummary"></p>
+      </div>
+      <div class="day-picker mobile-only" id="dayPicker"></div>
+      <div class="progress-bar mobile-only"><div class="progress-fill" id="progressFillM"></div></div>
+      <div class="columns-wrap">
+        <div class="columns" id="columns"></div>
+      </div>
+    </section>
+
+    <!-- PROGRESS (chart) -->
+    <section class="view view-progress" id="viewProgress">
+      <div class="chart-card">
+        <h2 style="margin-bottom:.75rem;font-size:1rem">📈 Прогрессия</h2>
+        <div class="chart-controls">
+          <select id="chartExercise" onchange="renderChart()"></select>
+          <div class="metric-tabs">
+            <button class="metric-tab active" data-m="weight" onclick="setMetric('weight')">Вес</button>
+            <button class="metric-tab" data-m="volume" onclick="setMetric('volume')">Объём</button>
+            <button class="metric-tab" data-m="reps" onclick="setMetric('reps')">Повторы</button>
+          </div>
+        </div>
+        <details class="chart-legend-wrap" id="chartLegendWrap"><summary>Легенда</summary><div class="chart-legend" id="chartLegend"></div></details>
+        <div class="chart-wrap chart-interactive" id="chartWrap"></div>
+        <p id="chartSummary" style="font-size:.8rem;color:var(--muted);margin-top:.75rem"></p>
+      </div>
+      <div class="chart-card">
+        <h3 style="font-size:.9rem;margin-bottom:.5rem">История записей</h3>
+        <div class="history-list" id="historyList"></div>
+      </div>
+    </section>
+
+    <!-- EDIT -->
+    <aside class="view view-edit sidebar-panel" id="viewEdit">
+      <h2 id="formTitle">Редактор</h2>
+      <p class="hint" id="selectedDayHint">Выберите упражнение или добавьте новое</p>
+      <input type="hidden" id="editId">
+      <input type="hidden" id="editDay" value="0">
+      <div class="form-group"><label>Название</label><input id="fName" placeholder="Становая тяга"></div>
+      <div class="form-group"><label>Тип</label>
+        <select id="fType">
+          <option>Сила</option><option>Гипертрофия</option><option>Кардио</option><option>Мобилити</option>
+        </select>
+      </div>
+      <div class="form-group form-row3">
+        <div><label>Подх.</label><input id="fSets" type="number" inputmode="numeric" value="4"></div>
+        <div><label>Повт.</label><input id="fReps" type="number" inputmode="numeric" value="8"></div>
+        <div><label>кг</label><input id="fWeight" type="number" inputmode="decimal" step="0.5"></div>
+      </div>
+      <div class="form-group"><label>Заметки</label><textarea id="fNotes" rows="2"></textarea></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="saveEx()">Сохранить</button>
+        <button class="btn btn-log" onclick="logProgress()">Записать в прогресс</button>
+        <button class="btn btn-secondary mobile-only" onclick="toggleDoneSelected()">✓ Выполнено</button>
+        <button class="btn btn-danger" onclick="deleteEx()">Удалить</button>
+      </div>
+      <div class="templates hide-mobile">
+        <h2 style="font-size:.9rem;margin-bottom:.5rem">Шаблоны</h2>
+        <button class="tpl" onclick="applyTemplate('push')">Push</button>
+        <button class="tpl" onclick="applyTemplate('pull')">Pull</button>
+        <button class="tpl" onclick="applyTemplate('legs')">Legs</button>
+      </div>
+      <details class="backup-section backup-details hide-mobile">
+        <summary>📓 Бэкап в Obsidian</summary>
+        <p class="backup-status" id="obsidianStatus">Бэкап в приложении. Экспорт: «Сохранить в vault».</p>
+        <button class="btn btn-backup" onclick="shareBackupToVault()">Сохранить в vault (Файлы)</button>
+        <button class="btn btn-backup" onclick="downloadObsidianBackup()">Скачать .md</button>
+        <button class="btn btn-backup" onclick="pickObsidianVault()">Папка vault (опционально)</button>
+        <button class="btn btn-backup" onclick="writeObsidianBackup(true)">Запись в vault (эксп.)</button>
+        <label class="check">
+          <input type="checkbox" id="obsidianAuto" onchange="toggleObsidianAuto()">
+          Автозапись в vault при изменениях
+        </label>
+        <button class="btn btn-secondary" style="width:100%;margin-top:.35rem" onclick="importFromObsidian()">Восстановить из .md</button>
+        <input type="file" id="obsidianImportInput" accept=".md,text/markdown" hidden>
+      </details>
+      <details class="editor-more mobile-only">
+        <summary>Шаблоны и бэкап</summary>
+        <div class="templates" style="margin-top:.75rem">
+          <button class="tpl" onclick="applyTemplate('push')">Push</button>
+          <button class="tpl" onclick="applyTemplate('pull')">Pull</button>
+          <button class="tpl" onclick="applyTemplate('legs')">Legs</button>
+        </div>
+        <div style="margin-top:1rem;display:flex;flex-direction:column;gap:.35rem">
+          <button class="btn btn-backup" onclick="shareBackupToVault()">Сохранить в vault</button>
+          <button class="btn btn-backup" onclick="downloadObsidianBackup()">Скачать .md</button>
+          <button class="btn btn-secondary" onclick="importFromObsidian()">Восстановить из .md</button>
+        </div>
+      </details>
+    </aside>
+  </div>
+
+  <nav class="bottom-nav mobile-only">
+    <button class="nav-btn active" data-view="plan" onclick="switchView('plan')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 4v4M16 4v4"/></svg>
+      План
+    </button>
+    <button class="nav-btn" data-view="progress" onclick="switchView('progress')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 20l4-8 4 4 4-12 4 8 2-4"/></svg>
+      Прогресс
+    </button>
+    <button class="nav-btn" data-view="edit" onclick="switchView('edit')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+      Редактор
+    </button>
+  </nav>
+
+  <script>
+    const KEY_WEEK = 'workout-v4';
+    const KEY_HISTORY = 'workout-v4-history';
+    const DAYS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+    const DAY_FULL = ['Понедельник','Вторник','Среда','Четверг','Пятница','Суббота','Воскресенье'];
+
+    function loadStored(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (raw === null) return fallback;
+        return JSON.parse(raw);
+      } catch {
+        return fallback;
+      }
+    }
+
+    let week = loadStored(KEY_WEEK, null);
+    if (!Array.isArray(week) || week.length !== 7) week = DAYS.map(() => []);
+    else week = week.map(d => Array.isArray(d) ? d : []);
+
+    let history = loadStored(KEY_HISTORY, []);
+    if (!Array.isArray(history)) history = [];
+
+    let mobileDay = 0;
+    let chartMetric = 'weight';
+    let desktopMode = 'plan';
+
+    const TEMPLATES = {
+      push: [
+        { name: 'Жим штанги', type: 'Сила', sets: 4, reps: 6, weight: 80 },
+        { name: 'Жим гантелей', type: 'Гипертрофия', sets: 3, reps: 10, weight: 28 },
+        { name: 'Брусья', type: 'Гипертрофия', sets: 3, reps: 12, weight: 0 },
+      ],
+      pull: [
+        { name: 'Подтягивания', type: 'Сила', sets: 4, reps: 8, weight: 0 },
+        { name: 'Тяга штанги', type: 'Сила', sets: 4, reps: 6, weight: 70 },
+        { name: 'Тяга блока', type: 'Гипертрофия', sets: 3, reps: 12, weight: 50 },
+      ],
+      legs: [
+        { name: 'Присед', type: 'Сила', sets: 5, reps: 5, weight: 100 },
+        { name: 'Румынская', type: 'Сила', sets: 4, reps: 8, weight: 80 },
+        { name: 'Выпады', type: 'Гипертрофия', sets: 3, reps: 10, weight: 20 },
+      ]
+    };
+
+    function getTodayIdx() {
+      const t = new Date().getDay();
+      return t === 0 ? 6 : t - 1;
+    }
+
+    const KEY_OBSIDIAN_AUTO = 'workout-v4-obsidian-auto';
+    const OBSIDIAN_FILENAME = 'Тренировки — бэкап.md';
+    const OBSIDIAN_BACKUP_DIR = '.workout-app-backup';
+    const KEY_INTERNAL_BACKUP = 'workout-v4-internal-backup-md';
+    const IDB_NAME = 'workout-obsidian-fs';
+    const IDB_STORE = 'handles';
+    let obsidianVaultHandle = null;
+    let obsidianBackupFileHandle = null;
+
+    function persist() {
+      localStorage.setItem(KEY_WEEK, JSON.stringify(week));
+      localStorage.setItem(KEY_HISTORY, JSON.stringify(history));
+      saveInternalBackup();
+      render();
+      if (localStorage.getItem(KEY_OBSIDIAN_AUTO) === '1') {
+        writeObsidianBackup(false).catch(() => {});
+      }
+    }
+
+    function saveInternalBackup() {
+      try {
+        localStorage.setItem(KEY_INTERNAL_BACKUP, buildObsidianMarkdown());
+      } catch (_) {}
+    }
+
+    function mkEx(o) {
+      return {
+        id: crypto.randomUUID(), done: false,
+        name: o.name, type: o.type || 'Сила',
+        sets: o.sets || 3, reps: o.reps || 10,
+        weight: o.weight || 0, notes: o.notes || ''
+      };
+    }
+
+    function volume(ex) { return (ex.sets || 0) * (ex.reps || 0) * (ex.weight || 0); }
+
+    function logProgress(fromEx) {
+      const ex = fromEx || getFormEx();
+      if (!ex || !ex.name) return alert('Сначала укажите название упражнения');
+      history.push({
+        id: crypto.randomUUID(),
+        exerciseKey: normalizeName(ex.name),
+        name: ex.name,
+        date: new Date().toISOString().slice(0, 10),
+        sets: ex.sets, reps: ex.reps, weight: ex.weight,
+        volume: volume(ex)
+      });
+      persist();
+      if (!fromEx) alert('Записано в прогресс');
+    }
+
+    function normalizeName(n) { return n.trim().toLowerCase(); }
+
+    function getFormEx() {
+      return {
+        name: document.getElementById('fName').value.trim(),
+        type: document.getElementById('fType').value,
+        sets: +document.getElementById('fSets').value,
+        reps: +document.getElementById('fReps').value,
+        weight: +document.getElementById('fWeight').value,
+        notes: document.getElementById('fNotes').value.trim()
+      };
+    }
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    /* ——— Navigation ——— */
+    function isMobileLayout() {
+      return window.matchMedia('(max-width: 900px)').matches ||
+        window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+    }
+
+    function applyLayoutMode() {
+      const mobile = isMobileLayout();
+      document.body.classList.toggle('mobile-ui', mobile);
+      syncViewVisibility();
+    }
+
+    function syncViewVisibility() {
+      const plan = document.getElementById('viewPlan');
+      const prog = document.getElementById('viewProgress');
+      const edit = document.getElementById('viewEdit');
+      if (!plan || !prog || !edit) return;
+      if (isMobileLayout()) {
+        plan.hidden = false;
+        prog.hidden = false;
+        edit.hidden = false;
+        prog.classList.toggle('mobile-tab-visible', prog.classList.contains('active'));
+        edit.classList.toggle('mobile-tab-visible', edit.classList.contains('active'));
+        edit.style.display = '';
+        return;
+      }
+      document.body.classList.remove('mobile-ui');
+      [prog, edit].forEach(v => v.classList.remove('mobile-tab-visible'));
+      plan.hidden = false;
+      if (desktopMode === 'progress') {
+        edit.hidden = true;
+        edit.style.display = 'none';
+        prog.hidden = false;
+      } else {
+        edit.hidden = false;
+        edit.style.display = '';
+        prog.hidden = !prog.classList.contains('desktop-show');
+      }
+    }
+
+    function switchView(name) {
+      const plan = document.getElementById('viewPlan');
+      const prog = document.getElementById('viewProgress');
+      const edit = document.getElementById('viewEdit');
+      const map = { plan, progress: prog, edit };
+      if (isMobileLayout()) {
+        [plan, prog, edit].forEach(v => v.classList.remove('active', 'mobile-tab-visible'));
+        if (name !== 'plan') map[name].classList.add('active', 'mobile-tab-visible');
+        else plan.classList.add('active');
+      } else {
+        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+        map[name].classList.add('active');
+      }
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+      syncViewVisibility();
+      if (name === 'progress') { populateChartSelect(); renderChart(); }
+      else if (name === 'plan') renderOverviewChart();
+    }
+
+    function setDesktopMode(mode) {
+      desktopMode = mode;
+      document.getElementById('btnShowPlan').classList.toggle('active', mode === 'plan');
+      document.getElementById('btnShowProgress').classList.toggle('active', mode === 'progress');
+      const plan = document.getElementById('viewPlan');
+      const prog = document.getElementById('viewProgress');
+      const edit = document.getElementById('viewEdit');
+      const bar = document.getElementById('progressBarWrap');
+      if (mode === 'progress') {
+        plan.classList.remove('active');
+        prog.classList.add('active', 'desktop-show');
+        edit.style.display = 'none';
+        bar.style.display = 'none';
+        populateChartSelect(); renderChart();
+      } else {
+        plan.classList.add('active');
+        prog.classList.remove('active', 'desktop-show');
+        edit.style.display = '';
+        bar.style.display = '';
+        renderOverviewChart();
+      }
+      applyLayoutMode();
+    }
+
+    function setMobileDay(idx) {
+      mobileDay = idx;
+      document.getElementById('editDay').value = idx;
+      render();
+    }
+
+    /* ——— Render plan ——— */
+    function render() {
+      const todayIdx = getTodayIdx();
+      let total = 0, done = 0;
+      week.forEach(day => day.forEach(e => { total++; if (e.done) done++; }));
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      const statsText = `${done}/${total} выполнено (${pct}%)`;
+      document.getElementById('weekStats').textContent = statsText;
+      ['progressFill', 'progressFillM'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.width = pct + '%';
+      });
+
+      document.getElementById('dayPicker').innerHTML = DAYS.map((d, i) =>
+        `<button class="day-chip ${i === mobileDay ? 'active' : ''} ${i === todayIdx ? 'today' : ''}" onclick="setMobileDay(${i})">${d}</button>`
+      ).join('');
+
+      const selectedId = document.getElementById('editId').value;
+      const columnHtml = dayIdx => {
+        const d = DAYS[dayIdx];
+        const list = week[dayIdx] || [];
+        const canDrag = !isMobileLayout() && window.innerWidth > 900;
+        return `
+          <div class="column ${dayIdx === todayIdx ? 'today' : ''} active-day" data-day="${dayIdx}">
+            <h3 class="hide-mobile">${d}</h3>
+            <h3 class="mobile-only">${DAY_FULL[dayIdx]}</h3>
+            ${list.map(ex => `
+              <div class="ex-item ${ex.done ? 'done' : ''} ${ex.id === selectedId ? 'selected' : ''}"
+                onclick="selectEx(${dayIdx},'${ex.id}')"
+                ${canDrag ? `draggable="true" ondragstart="dragStart(event,${dayIdx},'${ex.id}')" ondragover="event.preventDefault()" ondrop="dropEx(event,${dayIdx})"` : ''}>
+                <strong>${esc(ex.name)}</strong>
+                <small>${ex.sets}×${ex.reps} · ${ex.weight ? ex.weight + ' кг' : '—'} · ${ex.type}</small>
+              </div>
+            `).join('')}
+            <button class="add-mini" onclick="quickAdd(${dayIdx})">+ добавить</button>
+          </div>`;
+      };
+      const colsEl = document.getElementById('columns');
+      if (isMobileLayout()) {
+        colsEl.innerHTML = columnHtml(mobileDay);
+      } else {
+        colsEl.innerHTML = DAYS.map((d, dayIdx) => {
+          const html = columnHtml(dayIdx);
+          return dayIdx === mobileDay ? html : html.replace(' active-day"', '"');
+        }).join('');
+      }
+
+      renderOverviewChart();
+      if (document.getElementById('viewProgress')?.classList.contains('active')) renderHistoryList();
+    }
+
+    let drag = null;
+    function dragStart(e, day, id) { drag = { day, id }; e.dataTransfer.effectAllowed = 'move'; }
+    function dropEx(e, targetDay) {
+      e.preventDefault();
+      if (!drag) return;
+      const srcList = week[drag.day];
+      const idx = srcList.findIndex(x => x.id === drag.id);
+      if (idx < 0) return;
+      const [item] = srcList.splice(idx, 1);
+      week[targetDay].push(item);
+      drag = null;
+      persist();
+    }
+
+    function selectEx(day, id) {
+      const ex = week[day].find(e => e.id === id);
+      document.getElementById('editId').value = id;
+      document.getElementById('editDay').value = day;
+      document.getElementById('fName').value = ex.name;
+      document.getElementById('fType').value = ex.type;
+      document.getElementById('fSets').value = ex.sets;
+      document.getElementById('fReps').value = ex.reps;
+      document.getElementById('fWeight').value = ex.weight;
+      document.getElementById('fNotes').value = ex.notes || '';
+      document.getElementById('selectedDayHint').textContent = `${DAYS[day]} — ${ex.name}`;
+      document.getElementById('formTitle').textContent = 'Редактирование';
+      if (isMobileLayout()) switchView('edit');
+      render();
+    }
+
+    document.addEventListener('dblclick', e => {
+      if (window.innerWidth <= 900) return;
+      const item = e.target.closest('.ex-item');
+      if (!item) return;
+      const col = item.closest('.column');
+      const dayIdx = +col.dataset.day;
+      const m = item.getAttribute('onclick')?.match(/'([^']+)'$/);
+      if (!m) return;
+      toggleDone(dayIdx, m[1], true);
+    });
+
+    function toggleDoneSelected() {
+      const day = +document.getElementById('editDay').value;
+      const id = document.getElementById('editId').value;
+      if (!id) return;
+      toggleDone(day, id, true);
+    }
+
+    function toggleDone(day, id, logOnComplete) {
+      const ex = week[day].find(x => x.id === id);
+      ex.done = !ex.done;
+      if (ex.done && logOnComplete) logProgress(ex);
+      persist();
+    }
+
+    function quickAdd(day) {
+      document.getElementById('editId').value = '';
+      document.getElementById('editDay').value = day;
+      mobileDay = day;
+      document.getElementById('fName').value = '';
+      document.getElementById('fNotes').value = '';
+      document.getElementById('selectedDayHint').textContent = `Новое · ${DAYS[day]}`;
+      if (isMobileLayout()) switchView('edit');
+    }
+
+    function saveEx() {
+      const day = +document.getElementById('editDay').value;
+      const id = document.getElementById('editId').value;
+      const item = mkEx(getFormEx());
+      if (!item.name) return alert('Введите название');
+      if (id) {
+        const old = week[day].find(e => e.id === id);
+        item.id = id;
+        item.done = old.done;
+        week[day][week[day].findIndex(e => e.id === id)] = item;
+      } else {
+        week[day].push(item);
+        document.getElementById('editId').value = item.id;
+      }
+      persist();
+    }
+
+    function deleteEx() {
+      const day = +document.getElementById('editDay').value;
+      const id = document.getElementById('editId').value;
+      if (!id || !confirm('Удалить?')) return;
+      week[day] = week[day].filter(e => e.id !== id);
+      document.getElementById('editId').value = '';
+      persist();
+    }
+
+    function applyTemplate(key) {
+      const day = +document.getElementById('editDay').value || mobileDay;
+      if (!confirm(`Добавить «${key}» в ${DAYS[day]}?`)) return;
+      TEMPLATES[key].forEach(t => week[day].push(mkEx(t)));
+      persist();
+    }
+
+    /* ——— Obsidian backup ——— */
+    function buildObsidianMarkdown() {
+      const updated = new Date().toISOString();
+      let body = `# Тренировки — бэкап\n\n> Обновлено: ${updated.replace('T', ' ').slice(0, 16)}\n\n`;
+      body += `## План недели\n\n`;
+      week.forEach((day, i) => {
+        body += `### ${DAY_FULL[i]}\n\n`;
+        if (!day.length) { body += `_Пусто_\n\n`; return; }
+        day.forEach(ex => {
+          const check = ex.done ? 'x' : ' ';
+          const w = ex.weight ? ` · ${ex.weight} кг` : '';
+          body += `- [${check}] **${ex.name}** — ${ex.sets}×${ex.reps}${w} · ${ex.type}\n`;
+          if (ex.notes) body += `  - ${ex.notes}\n`;
+        });
+        body += '\n';
+      });
+      if (history.length) {
+        body += `## Прогрессия\n\n| Дата | Упражнение | Подходы | Вес | Объём |\n|------|------------|---------|-----|-------|\n`;
+        [...history].sort((a, b) => b.date.localeCompare(a.date)).forEach(h => {
+          body += `| ${h.date} | ${h.name} | ${h.sets}×${h.reps} | ${h.weight} кг | ${h.volume} |\n`;
+        });
+        body += '\n';
+      }
+      const payload = JSON.stringify({ week, history });
+      body += `## Восстановление\n\nДанные для импорта в приложение (кнопка «Восстановить из .md»):\n\n\`\`\`json\n${payload}\n\`\`\`\n`;
+      return `---\ntags: [тренировки, backup]\nupdated: ${updated}\napp: workout-tracker\n---\n\n${body}`;
+    }
+
+    function setObsidianStatus(msg) {
+      const el = document.getElementById('obsidianStatus');
+      if (el) el.textContent = msg;
+    }
+
+    function openObsidianIdb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(IDB_NAME, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function saveBackupHandle(handle, key) {
+      const db = await openObsidianIdb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        tx.objectStore(IDB_STORE).put(handle, key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function loadBackupHandle(key) {
+      const db = await openObsidianIdb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readonly');
+        const req = tx.objectStore(IDB_STORE).get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    function isFsHandle(h) {
+      return h && typeof h.queryPermission === 'function' &&
+        (h.kind === 'file' || h.kind === 'directory');
+    }
+
+    async function clearBackupHandle(key) {
+      if (key === 'file') obsidianBackupFileHandle = null;
+      if (key === 'vault') obsidianVaultHandle = null;
+      const db = await openObsidianIdb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, 'readwrite');
+        tx.objectStore(IDB_STORE).delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    function isStaleStateError(e) {
+      const m = (e && e.message) ? e.message : String(e);
+      return e?.name === 'InvalidStateError' ||
+        /state had changed|cached in an interface/i.test(m);
+    }
+
+    function formatWriteError(e) {
+      const m = (e && e.message) ? e.message : String(e);
+      if (isStaleStateError(e)) {
+        return 'синхронизация Obsidian мешает записи — используйте «Поделиться в vault»';
+      }
+      if (/user activation|gesture|aborted/i.test(m)) {
+        return 'нажмите «Сохранить сейчас» — браузер требует ваше действие';
+      }
+      if (/permission|denied|not allowed|read-only|read only/i.test(m)) {
+        return 'нет доступа на запись — выберите файл заново (режим записи)';
+      }
+      if (/not found|invalid|gone|missing|broken/i.test(m)) {
+        return 'связь с файлом потеряна — снова «Выбрать файл в хранилище»';
+      }
+      return m;
+    }
+
+    async function ensureWritePermission(handle, allowPrompt) {
+      const opts = { mode: 'readwrite' };
+      if ((await handle.queryPermission(opts)) === 'granted') return true;
+      if (!allowPrompt) return false;
+      if ((await handle.requestPermission(opts)) === 'granted') return true;
+      return false;
+    }
+
+    async function syncFileHandleFromDisk(fileHandle) {
+      if (fileHandle?.kind === 'file' && fileHandle.getFile) await fileHandle.getFile();
+    }
+
+    async function writeViaSyncAccess(fileHandle, md) {
+      const access = await fileHandle.createSyncAccessHandle();
+      const data = new TextEncoder().encode(md);
+      try {
+        if (access.truncate) access.truncate(0);
+        access.write(data, { at: 0 });
+        if (access.truncate) access.truncate(data.byteLength);
+      } finally {
+        access.close();
+      }
+    }
+
+    async function writeMarkdownToHandle(fileHandle, md) {
+      if (fileHandle.createSyncAccessHandle) {
+        try {
+          await writeViaSyncAccess(fileHandle, md);
+          return;
+        } catch (e) {
+          if (!isStaleStateError(e)) throw e;
+        }
+      }
+      const payload = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+      for (let i = 0; i < 4; i++) {
+        try {
+          await syncFileHandleFromDisk(fileHandle);
+          const writable = await fileHandle.createWritable({ keepExistingData: false });
+          try {
+            await writable.write(payload);
+          } finally {
+            await writable.close();
+          }
+          return;
+        } catch (e) {
+          if (!isStaleStateError(e) || i === 3) throw e;
+          await new Promise(r => setTimeout(r, 150 + i * 120));
+        }
+      }
+    }
+
+    async function getFreshBackupFileHandle(dirHandle) {
+      const sub = await dirHandle.getDirectoryHandle(OBSIDIAN_BACKUP_DIR, { create: true });
+      try { await sub.removeEntry(OBSIDIAN_FILENAME); } catch (_) {}
+      return sub.getFileHandle(OBSIDIAN_FILENAME, { create: true });
+    }
+
+    async function tryWriteVaultFile(dirHandle, md, allowPrompt) {
+      if (!(await ensureWritePermission(dirHandle, allowPrompt))) return false;
+      const fh = await getFreshBackupFileHandle(dirHandle);
+      if (!(await ensureWritePermission(fh, allowPrompt))) return false;
+      await writeMarkdownToHandle(fh, md);
+      return true;
+    }
+
+    async function shareBackupToVault() {
+      const md = buildObsidianMarkdown();
+      saveInternalBackup();
+      const shareName = 'workout-backup.md';
+      const mdTypes = [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }];
+
+      if (window.showSaveFilePicker) {
+        try {
+          const h = await showSaveFilePicker({ suggestedName: shareName, types: mdTypes });
+          const w = await h.createWritable();
+          await w.write(md);
+          await w.close();
+          setObsidianStatus('Файл сохранён — откройте его в Obsidian');
+          return;
+        } catch (e) {
+          if (e.name === 'AbortError') return;
+        }
+      }
+
+      if (navigator.share) {
+        const file = new File([md], shareName, { type: 'text/markdown;charset=utf-8' });
+        try {
+          if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: 'Бэкап тренировок' });
+            setObsidianStatus('Выберите «Файлы» или Obsidian');
+            return;
+          }
+        } catch (e) {
+          if (e.name === 'AbortError') return;
+        }
+        try {
+          await navigator.share({ title: 'Бэкап тренировок', text: md });
+          setObsidianStatus('Текст отправлен — сохраните в Obsidian');
+          return;
+        } catch (e) {
+          if (e.name === 'AbortError') return;
+        }
+      }
+
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(md);
+          setObsidianStatus('Скопировано — вставьте в новую заметку Obsidian');
+          return;
+        } catch (_) {}
+      }
+
+      downloadObsidianBackup();
+      setObsidianStatus('Скачано в «Загрузки» — перенесите в vault');
+    }
+
+    async function hasObsidianBackupTarget() {
+      if (obsidianVaultHandle) return true;
+      return !!(await loadBackupHandle('vault').catch(() => null));
+    }
+
+    async function pickObsidianBackupFile() {
+      setObsidianStatus('На Android используйте «Поделиться в vault» — это надёжнее.');
+      await shareBackupToVault();
+    }
+
+    async function pickObsidianVault() {
+      if (!window.showDirectoryPicker) {
+        setObsidianStatus('Выбор папки недоступен. Используйте «Поделиться в vault».');
+        return;
+      }
+      try {
+        obsidianVaultHandle = await showDirectoryPicker({ mode: 'readwrite' });
+        await saveBackupHandle(obsidianVaultHandle, 'vault');
+        setObsidianStatus(`Папка: ${obsidianVaultHandle.name} · для записи лучше «Поделиться»`);
+      } catch (e) {
+        if (e.name !== 'AbortError') setObsidianStatus('Не удалось выбрать папку: ' + e.message);
+      }
+    }
+
+    async function writeObsidianBackup(showAlert) {
+      const md = buildObsidianMarkdown();
+      saveInternalBackup();
+      const t = new Date().toLocaleString('ru');
+
+      const dirHandle = obsidianVaultHandle || await loadBackupHandle('vault').catch(() => null);
+      if (dirHandle && isFsHandle(dirHandle)) {
+        try {
+          const ok = await tryWriteVaultFile(dirHandle, md, showAlert);
+          if (ok) {
+            obsidianVaultHandle = dirHandle;
+            setObsidianStatus(`Сохранено в vault · ${t}`);
+            if (showAlert) alert('Бэкап записан в папку vault');
+            return;
+          }
+        } catch (e) {
+          if (!showAlert) {
+            setObsidianStatus(`В приложении ✓ · vault не записан (${formatWriteError(e)})`);
+            return;
+          }
+        }
+      }
+
+      if (showAlert) {
+        setObsidianStatus('Vault: Chrome блокирует запись (синхронизация). Нажмите «Поделиться в vault».');
+        return;
+      }
+      setObsidianStatus(`В приложении ✓ · ${t}`);
+    }
+
+    function downloadObsidianBackup() {
+      const md = buildObsidianMarkdown();
+      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = OBSIDIAN_FILENAME;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      setObsidianStatus('Файл скачан — переместите его в папку хранилища Obsidian');
+    }
+
+    async function toggleObsidianAuto() {
+      const el = document.getElementById('obsidianAuto');
+      const on = el.checked;
+      localStorage.setItem(KEY_OBSIDIAN_AUTO, on ? '1' : '0');
+      if (on) {
+        setObsidianStatus('В приложении — всегда. Vault — попытка при каждом изменении (часто не удаётся).');
+        writeObsidianBackup(false).catch(() => {});
+      } else {
+        setObsidianStatus('Автосохранение в vault выключено. Бэкап в приложении продолжается.');
+      }
+    }
+
+    function importFromObsidian() {
+      document.getElementById('obsidianImportInput').click();
+    }
+
+    function parseBackupMarkdown(text) {
+      const m = text.match(/```json\s*([\s\S]*?)```/);
+      if (!m) throw new Error('JSON-блок не найден');
+      return JSON.parse(m[1].trim());
+    }
+
+    function restoreBackupData(data) {
+      if (!data.week || !Array.isArray(data.week)) throw new Error('неверный формат');
+      week = data.week;
+      history = Array.isArray(data.history) ? data.history : [];
+      persist();
+    }
+
+    async function initObsidianBackup() {
+      document.getElementById('obsidianAuto').checked = localStorage.getItem(KEY_OBSIDIAN_AUTO) === '1';
+      obsidianBackupFileHandle = await loadBackupHandle('file').catch(() => null);
+      obsidianVaultHandle = await loadBackupHandle('vault').catch(() => null);
+      const auto = localStorage.getItem(KEY_OBSIDIAN_AUTO) === '1' ? 'вкл' : 'выкл';
+      if (obsidianVaultHandle) {
+        setObsidianStatus(`Папка vault: ${obsidianVaultHandle.name} · бэкап в приложении всегда · vault ${auto}`);
+      } else {
+        setObsidianStatus(`Бэкап в приложении активен · vault ${auto} · для Obsidian — «Поделиться»`);
+      }
+      document.getElementById('obsidianImportInput').addEventListener('change', async e => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          const data = parseBackupMarkdown(await file.text());
+          if (!confirm('Заменить текущие данные данными из файла?')) return;
+          restoreBackupData(data);
+          alert('Данные восстановлены');
+        } catch (err) {
+          alert('Ошибка: ' + err.message);
+        }
+        e.target.value = '';
+      });
+    }
+
+    /* ——— Chart ——— */
+    const CHART_PALETTE = [
+      '#a78bfa', '#38bdf8', '#34d399', '#fbbf24', '#f87171', '#fb923c',
+      '#e879f9', '#2dd4bf', '#60a5fa', '#a3e635', '#f472b6', '#f43f5e',
+      '#14b8a6', '#8b5cf6', '#84cc16', '#0ea5e9', '#d946ef', '#78716c'
+    ];
+    const KEY_OVERVIEW_PERIOD = 'workout-overview-period';
+    let overviewPeriod = localStorage.getItem(KEY_OVERVIEW_PERIOD) || '4w';
+    const chartStates = {};
+    let exerciseColorMap = null;
+
+    function escAttr(s) {
+      return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    }
+
+    function refreshExerciseColors() {
+      const keys = getHistoryExerciseKeys();
+      exerciseColorMap = {};
+      keys.forEach((key, i) => {
+        exerciseColorMap[key] = CHART_PALETTE[i % CHART_PALETTE.length];
+      });
+    }
+
+    function getExerciseColor(key) {
+      if (!exerciseColorMap) refreshExerciseColors();
+      if (key && exerciseColorMap[key] === undefined) refreshExerciseColors();
+      return exerciseColorMap[key] || CHART_PALETTE[0];
+    }
+
+    function hexToRgba(hex, a) {
+      const n = parseInt(hex.slice(1), 16);
+      return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+    }
+
+    function getExerciseName(key) {
+      const row = history.find(h => h.exerciseKey === key);
+      return row ? row.name : key;
+    }
+
+    function getHistoryExerciseKeys() {
+      return [...new Set(history.map(h => h.exerciseKey))].sort((a, b) =>
+        getExerciseName(a).localeCompare(getExerciseName(b), 'ru'));
+    }
+
+    function syncPeriodTabs() {
+      document.querySelectorAll('.overview-period .period-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.p === overviewPeriod);
+      });
+    }
+
+    function setOverviewPeriod(p) {
+      overviewPeriod = p;
+      localStorage.setItem(KEY_OVERVIEW_PERIOD, p);
+      syncPeriodTabs();
+      renderOverviewChart();
+    }
+
+    function filterSeriesByPeriod(series, period) {
+      if (period === 'all' || !series.length) return series;
+      const last = series[series.length - 1].date;
+      const end = new Date(last + 'T12:00:00');
+      const days = period === '4w' ? 28 : 92;
+      const start = new Date(end);
+      start.setDate(start.getDate() - days);
+      const startStr = start.toISOString().slice(0, 10);
+      return series.filter(s => s.date >= startStr);
+    }
+
+    function metricValue(h) {
+      if (chartMetric === 'volume') return h.volume || 0;
+      if (chartMetric === 'reps') return h.reps || 0;
+      return h.weight || 0;
+    }
+
+    function getSeriesForKey(key) {
+      return history
+        .filter(h => h.exerciseKey === key)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map(h => ({ date: h.date, value: metricValue(h) }));
+    }
+
+    function getVolumeSeriesForKey(key) {
+      return history
+        .filter(h => h.exerciseKey === key)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map(h => ({ date: h.date, value: h.volume || 0 }));
+    }
+
+    function buildChartLines(volumeMode, period) {
+      refreshExerciseColors();
+      const p = period ?? (volumeMode ? overviewPeriod : 'all');
+      return getHistoryExerciseKeys().map(key => ({
+        key,
+        name: getExerciseName(key),
+        color: getExerciseColor(key),
+        series: filterSeriesByPeriod(
+          volumeMode ? getVolumeSeriesForKey(key) : getSeriesForKey(key),
+          p
+        )
+      })).filter(l => l.series.length);
+    }
+
+    function renderChartLegend(containerId, lines, highlightKey) {
+      const wrapId = containerId === 'chartLegend' ? 'chartLegendWrap' : 'overviewLegendWrap';
+      const wrap = document.getElementById(wrapId);
+      const el = document.getElementById(containerId);
+      if (!el) return;
+      if (!lines.length) {
+        if (wrap) wrap.style.display = 'none';
+        el.innerHTML = '';
+        return;
+      }
+      if (wrap) {
+        wrap.style.display = '';
+        const sum = wrap.querySelector('summary');
+        if (sum) sum.textContent = `Легенда (${lines.length})`;
+      }
+      el.innerHTML = lines.map(l => `
+        <span class="chart-legend-item ${highlightKey && highlightKey !== l.key ? 'dimmed' : ''}" data-key="${escAttr(l.key)}" title="${esc(l.name)}">
+          <span class="chart-legend-swatch" style="background:${l.color}"></span>
+          <span class="chart-legend-label">${esc(l.name)}</span>
+        </span>
+      `).join('');
+    }
+
+    function getOverallSeries() {
+      const byDate = {};
+      history.forEach(h => {
+        byDate[h.date] = (byDate[h.date] || 0) + (h.volume || 0);
+      });
+      return Object.keys(byDate).sort().map(date => ({ date, value: byDate[date] }));
+    }
+
+    function renderOverviewChart() {
+      const wrap = document.getElementById('overviewChartWrap');
+      const summary = document.getElementById('overviewSummary');
+      if (!wrap) return;
+      const lines = buildChartLines(true);
+      if (!lines.length) {
+        wrap.innerHTML = '<p class="chart-empty" style="padding:1.5rem 1rem">Записывайте тренировки — здесь появится график по упражнениям</p>';
+        if (summary) summary.textContent = '';
+        renderChartLegend('overviewLegend', []);
+        delete chartStates.overview;
+        return;
+      }
+      wrap.innerHTML = '<canvas id="overviewChart"></canvas>';
+      const canvas = document.getElementById('overviewChart');
+      chartStates.overview = drawMultiLineChart(canvas, lines, { fill: true });
+      bindChartInteraction(wrap, chartStates.overview, 'кг·повт');
+      renderChartLegend('overviewLegend', lines);
+      const totals = filterSeriesByPeriod(getOverallSeries(), overviewPeriod);
+      if (summary && totals.length) {
+        const first = totals[0].value, last = totals[totals.length - 1].value;
+        const delta = last - first;
+        const sign = delta > 0 ? '+' : '';
+        summary.innerHTML = `Суммарный объём за день · <strong>${Math.round(first)}</strong> → <strong>${Math.round(last)}</strong> <span class="${delta >= 0 ? 'delta-up' : 'delta-down'}">(${sign}${Math.round(delta)})</span>`;
+      }
+    }
+
+    function populateChartSelect() {
+      const sel = document.getElementById('chartExercise');
+      if (!sel) return;
+      const prev = sel.value;
+      const keys = getHistoryExerciseKeys();
+      sel.innerHTML = keys.length
+        ? `<option value="">Все упражнения</option>` + keys.map(k =>
+            `<option value="${escAttr(k)}">${esc(getExerciseName(k))}</option>`
+          ).join('')
+        : '<option value="">— нет данных —</option>';
+      if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+    }
+
+    function setMetric(m) {
+      chartMetric = m;
+      document.querySelectorAll('.metric-tab').forEach(t => t.classList.toggle('active', t.dataset.m === m));
+      renderChart();
+    }
+
+    function renderChart() {
+      const wrap = document.getElementById('chartWrap');
+      const summary = document.getElementById('chartSummary');
+      if (!wrap) return;
+      const filterKey = document.getElementById('chartExercise')?.value || '';
+      let lines = buildChartLines(false);
+      if (filterKey) lines = lines.filter(l => l.key === filterKey);
+      if (!lines.length) {
+        wrap.innerHTML = '<p class="chart-empty">Нет записей. Выполните упражнение или нажмите «Записать в прогресс» в редакторе.</p>';
+        if (summary) summary.textContent = '';
+        renderChartLegend('chartLegend', []);
+        delete chartStates.detail;
+        renderHistoryList();
+        return;
+      }
+      wrap.innerHTML = '<canvas id="chart"></canvas>';
+      const c = document.getElementById('chart');
+      chartStates.detail = drawMultiLineChart(c, lines, { fill: !filterKey || lines.length === 1 });
+      const labels = { weight: 'кг', volume: 'кг·повт', reps: 'повт' };
+      bindChartInteraction(wrap, chartStates.detail, labels[chartMetric]);
+      renderChartLegend('chartLegend', buildChartLines(false), filterKey || null);
+      const unit = labels[chartMetric];
+      if (summary && lines.length === 1) {
+        const s = lines[0].series;
+        const first = s[0].value, last = s[s.length - 1].value;
+        const delta = last - first;
+        const sign = delta > 0 ? '+' : '';
+        summary.innerHTML = `${esc(lines[0].name)}: <strong>${first}</strong> → <strong>${last}</strong> ${unit}
+          <span class="${delta >= 0 ? 'delta-up' : 'delta-down'}">(${sign}${delta.toFixed(chartMetric === 'reps' ? 0 : 1)})</span>`;
+      } else if (summary) {
+        summary.textContent = `${lines.length} упражн. · метрика: ${unit}`;
+      }
+      renderHistoryList();
+    }
+
+    function drawMultiLineChart(canvas, lines, opts = {}) {
+      const parent = canvas.parentElement;
+      if (!parent) return null;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = parent.getBoundingClientRect();
+      const W = Math.max(rect.width, 1);
+      const H = Math.max(rect.height, 1);
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const pad = { t: 16, r: 12, b: 36, l: 44 };
+      const plotW = W - pad.l - pad.r, plotH = H - pad.t - pad.b;
+
+      const allVals = lines.flatMap(l => l.series.map(s => s.value));
+      if (!allVals.length) return null;
+      let minV = Math.min(...allVals) * 0.9;
+      let maxV = Math.max(...allVals) * 1.05 || 1;
+      if (minV === maxV) { minV *= 0.9; maxV *= 1.1 || 1; }
+
+      ctx.clearRect(0, 0, W, H);
+      ctx.strokeStyle = '#3f3f46';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.t + (plotH / 4) * i;
+        ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W - pad.r, y); ctx.stroke();
+        const v = maxV - ((maxV - minV) / 4) * i;
+        ctx.fillStyle = '#71717a';
+        ctx.font = '10px system-ui';
+        ctx.textAlign = 'right';
+        ctx.fillText(v < 10 ? v.toFixed(1) : Math.round(v), pad.l - 6, y + 3);
+      }
+
+      const allDates = [...new Set(lines.flatMap(l => l.series.map(s => s.date)))].sort();
+      const dateX = date => {
+        if (allDates.length === 1) return pad.l + plotW / 2;
+        const i = allDates.indexOf(date);
+        return pad.l + (plotW / (allDates.length - 1)) * i;
+      };
+      const valY = v => pad.t + plotH - ((v - minV) / (maxV - minV || 1)) * plotH;
+
+      const state = { points: [], lines: [], allDates };
+
+      lines.forEach(line => {
+        const pts = line.series.map(s => ({
+          x: dateX(s.date), y: valY(s.value), date: s.date, value: s.value,
+          key: line.key, name: line.name, color: line.color
+        }));
+        state.lines.push({ key: line.key, color: line.color, points: pts });
+
+        if (opts.fill && lines.length === 1) {
+          const g = ctx.createLinearGradient(0, pad.t, 0, H - pad.b);
+          g.addColorStop(0, hexToRgba(line.color, 0.35));
+          g.addColorStop(1, hexToRgba(line.color, 0));
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, H - pad.b);
+          pts.forEach(p => ctx.lineTo(p.x, p.y));
+          ctx.lineTo(pts[pts.length - 1].x, H - pad.b);
+          ctx.closePath();
+          ctx.fillStyle = g;
+          ctx.fill();
+        }
+
+        ctx.beginPath();
+        pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+        ctx.strokeStyle = line.color;
+        ctx.lineWidth = 2.5;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+
+        pts.forEach(p => {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+          ctx.fillStyle = line.color;
+          ctx.fill();
+          ctx.strokeStyle = '#18181b';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          state.points.push(p);
+        });
+      });
+
+      ctx.fillStyle = '#a1a1aa';
+      ctx.font = '9px system-ui';
+      ctx.textAlign = 'center';
+      allDates.forEach((d, i) => {
+        if (allDates.length > 8 && i % Math.ceil(allDates.length / 8) !== 0 && i !== allDates.length - 1) return;
+        ctx.fillText(d.slice(5), dateX(d), H - pad.b + 14);
+      });
+
+      return state;
+    }
+
+    function bindChartInteraction(wrap, state, unit) {
+      if (!state || !state.points.length) return;
+      let tip = wrap.querySelector('.chart-tooltip');
+      if (!tip) {
+        tip = document.createElement('div');
+        tip.className = 'chart-tooltip';
+        tip.style.display = 'none';
+        wrap.appendChild(tip);
+      }
+      const canvas = wrap.querySelector('canvas');
+      if (!canvas) return;
+
+      const hideTip = () => { tip.style.display = 'none'; };
+
+      const showOne = pt => {
+        if (!pt) { hideTip(); return; }
+        tip.style.display = 'block';
+        tip.style.left = pt.x + 'px';
+        tip.style.top = pt.y + 'px';
+        tip.style.whiteSpace = 'nowrap';
+        tip.innerHTML = `<strong style="color:${pt.color}">${esc(pt.name)}</strong><br>${pt.date} · ${pt.value} ${unit}`;
+      };
+
+      const showMany = (pts, anchor) => {
+        tip.style.display = 'block';
+        tip.style.left = anchor.x + 'px';
+        tip.style.top = anchor.y + 'px';
+        tip.style.whiteSpace = 'normal';
+        tip.innerHTML = pts.map(p =>
+          `<div><strong style="color:${p.color}">${esc(p.name)}</strong> · ${p.value} ${unit}</div>`
+        ).join('');
+      };
+
+      const pick = (clientX, clientY) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = clientX - rect.left;
+        const my = clientY - rect.top;
+        const snapX = 26;
+
+        const nearX = state.points.filter(p => Math.abs(p.x - mx) <= snapX);
+        if (nearX.length) {
+          const anchor = nearX.reduce((a, p) =>
+            Math.abs(p.x - mx) < Math.abs(a.x - mx) ? p : a, nearX[0]);
+          const sameDate = nearX.filter(p => p.date === anchor.date);
+          if (sameDate.length > 1) {
+            showMany(sameDate.sort((a, b) => a.name.localeCompare(b.name, 'ru')), anchor);
+            return;
+          }
+          showOne(anchor);
+          return;
+        }
+
+        let best = null, bestD = Infinity;
+        state.points.forEach(p => {
+          const d = Math.hypot(p.x - mx, p.y - my);
+          if (d < bestD) { bestD = d; best = p; }
+        });
+        if (bestD > 44) hideTip();
+        else showOne(best);
+      };
+
+      canvas.onmousemove = e => pick(e.clientX, e.clientY);
+      canvas.onmouseleave = hideTip;
+      canvas.ontouchmove = e => {
+        if (e.touches.length) { e.preventDefault(); pick(e.touches[0].clientX, e.touches[0].clientY); }
+      };
+      canvas.ontouchend = hideTip;
+    }
+
+    function renderSparklines() {}
+
+    function renderHistoryList() {
+      const key = document.getElementById('chartExercise')?.value;
+      const list = document.getElementById('historyList');
+      if (!list) return;
+      const items = (key ? history.filter(h => h.exerciseKey === key) : [...history])
+        .sort((a, b) => b.date.localeCompare(a.date))
+        .slice(0, 20);
+      if (!items.length) {
+        list.innerHTML = '<p class="chart-empty" style="padding:1rem">Пока пусто</p>';
+        return;
+      }
+      list.innerHTML = items.map(h => {
+        const c = getExerciseColor(h.exerciseKey);
+        return `
+        <div class="history-item" style="border-left-color:${c}">
+          <div class="history-item-body"><strong style="color:${c}">${esc(h.name)}</strong><br><span>${h.date} · ${h.sets}×${h.reps}</span></div>
+          <div class="history-item-stats"><strong>${h.weight} кг</strong><br><span>объём ${h.volume}</span></div>
+          <button type="button" class="history-del" onclick="deleteHistoryEntry('${escAttr(h.id)}')" title="Удалить" aria-label="Удалить">×</button>
+        </div>`;
+      }).join('');
+    }
+
+    function deleteHistoryEntry(id) {
+      if (!confirm('Удалить эту запись из истории?')) return;
+      history = history.filter(h => h.id !== id);
+      persist();
+      populateChartSelect();
+      renderChart();
+    }
+
+    window.addEventListener('resize', () => {
+      applyLayoutMode();
+      if (document.getElementById('viewPlan').classList.contains('active') && document.getElementById('overviewChartWrap')) renderOverviewChart();
+      if (document.getElementById('viewProgress').classList.contains('active')
+        || document.getElementById('viewProgress').classList.contains('desktop-show')) renderChart();
+      renderSparklines();
+    });
+
+    function bootApp() {
+      try {
+        mobileDay = getTodayIdx();
+        document.getElementById('editDay').value = mobileDay;
+        initObsidianBackup();
+        syncPeriodTabs();
+        applyLayoutMode();
+        render();
+        populateChartSelect();
+      } catch (err) {
+        console.error(err);
+        const box = document.createElement('div');
+        box.style.cssText = 'margin:1rem;padding:1rem;background:#450a0a;color:#fecaca;border-radius:8px;font-size:.85rem';
+        box.textContent = 'Ошибка запуска: ' + (err.message || err) + '. Очистите данные сайта в настройках Chrome и обновите страницу.';
+        document.body.prepend(box);
+      }
+    }
+    bootApp();
+  </script>
+</body>
+</html>
