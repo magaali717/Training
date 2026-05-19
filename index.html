@@ -377,14 +377,14 @@
       </div>
       <div class="backup-section">
         <h2>📓 Бэкап в Obsidian</h2>
-        <p class="backup-status" id="obsidianStatus">Chrome + https. Лучше «папка vault» — файл в .workout-app-backup/. Закройте заметку бэкапа в Obsidian при сохранении.</p>
-        <button class="btn btn-backup" onclick="pickObsidianVault()">Выбрать папку vault (надёжнее)</button>
-        <button class="btn btn-backup" onclick="pickObsidianBackupFile()">Выбрать файл в хранилище</button>
-        <button class="btn btn-backup" onclick="writeObsidianBackup(true)">Сохранить сейчас</button>
+        <p class="backup-status" id="obsidianStatus">Бэкап в приложении — всегда. В vault — кнопка «Поделиться» (надёжно на Android).</p>
+        <button class="btn btn-backup" onclick="pickObsidianVault()">Выбрать папку vault (опционально)</button>
+        <button class="btn btn-backup" onclick="shareBackupToVault()">Поделиться в vault / Файлы</button>
+        <button class="btn btn-backup" onclick="writeObsidianBackup(true)">Записать в vault (эксперимент)</button>
         <button class="btn btn-backup" onclick="downloadObsidianBackup()">Скачать .md</button>
         <label class="check">
           <input type="checkbox" id="obsidianAuto" onchange="toggleObsidianAuto()">
-          Автосохранение при каждом изменении
+          Пытаться писать в vault при изменениях (на телефоне обычно не работает)
         </label>
         <button class="btn btn-secondary" style="width:100%;margin-top:.35rem" onclick="importFromObsidian()">Восстановить из .md</button>
         <input type="file" id="obsidianImportInput" accept=".md,text/markdown" hidden>
@@ -460,7 +460,7 @@
     const KEY_OBSIDIAN_AUTO = 'workout-v4-obsidian-auto';
     const OBSIDIAN_FILENAME = 'Тренировки — бэкап.md';
     const OBSIDIAN_BACKUP_DIR = '.workout-app-backup';
-    const KEY_PENDING_BACKUP = 'workout-pending-backup-md';
+    const KEY_INTERNAL_BACKUP = 'workout-v4-internal-backup-md';
     const IDB_NAME = 'workout-obsidian-fs';
     const IDB_STORE = 'handles';
     let obsidianVaultHandle = null;
@@ -469,10 +469,17 @@
     function persist() {
       localStorage.setItem(KEY_WEEK, JSON.stringify(week));
       localStorage.setItem(KEY_HISTORY, JSON.stringify(history));
+      saveInternalBackup();
       render();
       if (localStorage.getItem(KEY_OBSIDIAN_AUTO) === '1') {
         writeObsidianBackup(false).catch(() => {});
       }
+    }
+
+    function saveInternalBackup() {
+      try {
+        localStorage.setItem(KEY_INTERNAL_BACKUP, buildObsidianMarkdown());
+      } catch (_) {}
     }
 
     function mkEx(o) {
@@ -786,7 +793,7 @@
     function formatWriteError(e) {
       const m = (e && e.message) ? e.message : String(e);
       if (isStaleStateError(e)) {
-        return 'Obsidian держит файл открытым — закройте эту заметку, подождите 2 сек и нажмите «Сохранить сейчас»';
+        return 'синхронизация Obsidian мешает записи — используйте «Поделиться в vault»';
       }
       if (/user activation|gesture|aborted/i.test(m)) {
         return 'нажмите «Сохранить сейчас» — браузер требует ваше действие';
@@ -812,11 +819,29 @@
       if (fileHandle?.kind === 'file' && fileHandle.getFile) await fileHandle.getFile();
     }
 
+    async function writeViaSyncAccess(fileHandle, md) {
+      const access = await fileHandle.createSyncAccessHandle();
+      const data = new TextEncoder().encode(md);
+      try {
+        if (access.truncate) access.truncate(0);
+        access.write(data, { at: 0 });
+        if (access.truncate) access.truncate(data.byteLength);
+      } finally {
+        access.close();
+      }
+    }
+
     async function writeMarkdownToHandle(fileHandle, md) {
+      if (fileHandle.createSyncAccessHandle) {
+        try {
+          await writeViaSyncAccess(fileHandle, md);
+          return;
+        } catch (e) {
+          if (!isStaleStateError(e)) throw e;
+        }
+      }
       const payload = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-      const attempts = 6;
-      let lastErr;
-      for (let i = 0; i < attempts; i++) {
+      for (let i = 0; i < 4; i++) {
         try {
           await syncFileHandleFromDisk(fileHandle);
           const writable = await fileHandle.createWritable({ keepExistingData: false });
@@ -827,169 +852,99 @@
           }
           return;
         } catch (e) {
-          lastErr = e;
-          if (!isStaleStateError(e) || i === attempts - 1) throw e;
-          await new Promise(r => setTimeout(r, 100 + i * 100));
+          if (!isStaleStateError(e) || i === 3) throw e;
+          await new Promise(r => setTimeout(r, 150 + i * 120));
         }
       }
-      throw lastErr;
     }
 
-    async function getBackupFileFromDir(dirHandle) {
+    async function getFreshBackupFileHandle(dirHandle) {
       const sub = await dirHandle.getDirectoryHandle(OBSIDIAN_BACKUP_DIR, { create: true });
+      try { await sub.removeEntry(OBSIDIAN_FILENAME); } catch (_) {}
       return sub.getFileHandle(OBSIDIAN_FILENAME, { create: true });
     }
 
-    async function writeBackupViaDirectory(dirHandle, md, showAlert) {
-      if (!(await ensureWritePermission(dirHandle, showAlert))) {
-        if (!showAlert) return false;
-        throw new Error('доступ к папке не выдан');
-      }
-      const fh = await getBackupFileFromDir(dirHandle);
-      if (!(await ensureWritePermission(fh, showAlert))) {
-        if (!showAlert) return false;
-        throw new Error('доступ к файлу не выдан');
-      }
+    async function tryWriteVaultFile(dirHandle, md, allowPrompt) {
+      if (!(await ensureWritePermission(dirHandle, allowPrompt))) return false;
+      const fh = await getFreshBackupFileHandle(dirHandle);
+      if (!(await ensureWritePermission(fh, allowPrompt))) return false;
       await writeMarkdownToHandle(fh, md);
-      obsidianBackupFileHandle = fh;
-      obsidianVaultHandle = dirHandle;
-      await saveBackupHandle(fh, 'file');
-      await saveBackupHandle(dirHandle, 'vault');
       return true;
     }
 
+    async function shareBackupToVault() {
+      const md = buildObsidianMarkdown();
+      saveInternalBackup();
+      if (!navigator.share) {
+        downloadObsidianBackup();
+        return;
+      }
+      try {
+        const file = new File([md], OBSIDIAN_FILENAME, { type: 'text/markdown;charset=utf-8' });
+        const payload = { files: [file], title: 'Бэкап тренировок' };
+        if (navigator.canShare && !navigator.canShare(payload)) {
+          downloadObsidianBackup();
+          return;
+        }
+        await navigator.share(payload);
+        setObsidianStatus('Выберите «Сохранить в Файлы» → папка vault Obsidian');
+      } catch (e) {
+        if (e.name !== 'AbortError') setObsidianStatus('Не удалось поделиться: ' + (e.message || e));
+      }
+    }
+
     async function hasObsidianBackupTarget() {
-      if (obsidianBackupFileHandle || obsidianVaultHandle) return true;
-      const f = await loadBackupHandle('file').catch(() => null);
-      const d = await loadBackupHandle('vault').catch(() => null);
-      return !!(f || d);
+      if (obsidianVaultHandle) return true;
+      return !!(await loadBackupHandle('vault').catch(() => null));
     }
 
     async function pickObsidianBackupFile() {
-      try {
-        const mdTypes = [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }];
-        if (window.showSaveFilePicker) {
-          obsidianBackupFileHandle = await showSaveFilePicker({
-            suggestedName: OBSIDIAN_FILENAME,
-            types: mdTypes
-          });
-        } else if (window.showOpenFilePicker) {
-          [obsidianBackupFileHandle] = await showOpenFilePicker({
-            mode: 'readwrite',
-            types: mdTypes,
-            multiple: false
-          });
-        } else {
-          setObsidianStatus('Нужен Chrome по https. Или используйте «Скачать .md».');
-          return;
-        }
-        await saveBackupHandle(obsidianBackupFileHandle, 'file');
-        setObsidianStatus(`Файл: ${obsidianBackupFileHandle.name}`);
-        await writeObsidianBackup(true);
-      } catch (e) {
-        if (e.name !== 'AbortError') setObsidianStatus('Не удалось выбрать файл: ' + formatWriteError(e));
-      }
+      setObsidianStatus('На Android используйте «Поделиться в vault» — это надёжнее.');
+      await shareBackupToVault();
     }
 
     async function pickObsidianVault() {
       if (!window.showDirectoryPicker) {
-        setObsidianStatus('Выбор папки недоступен. На телефоне нажмите «Выбрать файл в хранилище».');
+        setObsidianStatus('Выбор папки недоступен. Используйте «Поделиться в vault».');
         return;
       }
       try {
         obsidianVaultHandle = await showDirectoryPicker({ mode: 'readwrite' });
         await saveBackupHandle(obsidianVaultHandle, 'vault');
-        setObsidianStatus(`Папка: ${obsidianVaultHandle.name}/${OBSIDIAN_BACKUP_DIR}`);
-        await writeObsidianBackup(true);
+        setObsidianStatus(`Папка: ${obsidianVaultHandle.name} · для записи лучше «Поделиться»`);
       } catch (e) {
         if (e.name !== 'AbortError') setObsidianStatus('Не удалось выбрать папку: ' + e.message);
       }
     }
 
     async function writeObsidianBackup(showAlert) {
-      let md = buildObsidianMarkdown();
-      const pending = localStorage.getItem(KEY_PENDING_BACKUP);
-      if (pending && showAlert) md = pending;
+      const md = buildObsidianMarkdown();
+      saveInternalBackup();
+      const t = new Date().toLocaleString('ru');
 
-      let fileHandle = obsidianBackupFileHandle || await loadBackupHandle('file').catch(() => null);
-      let dirHandle = obsidianVaultHandle || await loadBackupHandle('vault').catch(() => null);
-
-      if (fileHandle && !isFsHandle(fileHandle)) {
-        await clearBackupHandle('file').catch(() => {});
-        fileHandle = null;
-      }
-      if (dirHandle && !isFsHandle(dirHandle)) {
-        await clearBackupHandle('vault').catch(() => {});
-        dirHandle = null;
-      }
-
-      const setSaved = (label) => {
-        localStorage.removeItem(KEY_PENDING_BACKUP);
-        const t = new Date().toLocaleString('ru');
-        setObsidianStatus(`Сохранено: ${label} · ${t}`);
-        if (showAlert) alert('Бэкап записан в хранилище Obsidian');
-      };
-
-      const reportFail = (prefix, e, key) => {
-        const msg = formatWriteError(e);
-        if (/потеряна|заново/i.test(msg) && key) clearBackupHandle(key).catch(() => {});
-        if (!showAlert && isStaleStateError(e)) {
-          localStorage.setItem(KEY_PENDING_BACKUP, md);
-          setObsidianStatus('Автосохранение отложено — закройте заметку в Obsidian и нажмите «Сохранить сейчас»');
-          return;
-        }
-        if (!showAlert) {
-          setObsidianStatus('Автосохранение: ' + msg);
-          return;
-        }
-        setObsidianStatus(prefix + msg);
-      };
-
-      if (dirHandle) {
+      const dirHandle = obsidianVaultHandle || await loadBackupHandle('vault').catch(() => null);
+      if (dirHandle && isFsHandle(dirHandle)) {
         try {
-          const ok = await writeBackupViaDirectory(dirHandle, md, showAlert);
-          if (ok === false) {
-            if (!showAlert) {
-              setObsidianStatus('Автосохранение: нажмите «Сохранить сейчас»');
-              return;
-            }
-          } else {
-            setSaved(`${OBSIDIAN_BACKUP_DIR}/${OBSIDIAN_FILENAME}`);
+          const ok = await tryWriteVaultFile(dirHandle, md, showAlert);
+          if (ok) {
+            obsidianVaultHandle = dirHandle;
+            setObsidianStatus(`Сохранено в vault · ${t}`);
+            if (showAlert) alert('Бэкап записан в папку vault');
             return;
           }
         } catch (e) {
-          if (!fileHandle) {
-            reportFail('Ошибка записи: ', e, 'vault');
+          if (!showAlert) {
+            setObsidianStatus(`В приложении ✓ · vault не записан (${formatWriteError(e)})`);
             return;
           }
-        }
-      }
-
-      if (fileHandle) {
-        try {
-          if (!(await ensureWritePermission(fileHandle, showAlert))) {
-            if (!showAlert) {
-              setObsidianStatus('Автосохранение: нажмите «Сохранить сейчас»');
-              return;
-            }
-            throw new Error('доступ к файлу не выдан');
-          }
-          await writeMarkdownToHandle(fileHandle, md);
-          obsidianBackupFileHandle = fileHandle;
-          await saveBackupHandle(fileHandle, 'file');
-          setSaved(fileHandle.name);
-          return;
-        } catch (e) {
-          reportFail('Ошибка записи: ', e, 'file');
-          return;
         }
       }
 
       if (showAlert) {
-        setObsidianStatus('Сначала «Выбрать папку vault» или файл в хранилище.');
-      } else if (localStorage.getItem(KEY_OBSIDIAN_AUTO) === '1') {
-        setObsidianStatus('Автосохранение: укажите папку vault в Obsidian.');
+        setObsidianStatus('Vault: Chrome блокирует запись (синхронизация). Нажмите «Поделиться в vault».');
+        return;
       }
+      setObsidianStatus(`В приложении ✓ · ${t}`);
     }
 
     function downloadObsidianBackup() {
@@ -1006,14 +961,13 @@
     async function toggleObsidianAuto() {
       const el = document.getElementById('obsidianAuto');
       const on = el.checked;
-      if (on && !(await hasObsidianBackupTarget())) {
-        el.checked = false;
-        setObsidianStatus('Сначала выберите файл или папку в хранилище Obsidian.');
-        return;
-      }
       localStorage.setItem(KEY_OBSIDIAN_AUTO, on ? '1' : '0');
-      setObsidianStatus(on ? 'Автосохранение включено' : 'Автосохранение выключено');
-      if (on) writeObsidianBackup(false).catch(() => {});
+      if (on) {
+        setObsidianStatus('В приложении — всегда. Vault — попытка при каждом изменении (часто не удаётся).');
+        writeObsidianBackup(false).catch(() => {});
+      } else {
+        setObsidianStatus('Автосохранение в vault выключено. Бэкап в приложении продолжается.');
+      }
     }
 
     function importFromObsidian() {
@@ -1038,10 +992,10 @@
       obsidianBackupFileHandle = await loadBackupHandle('file').catch(() => null);
       obsidianVaultHandle = await loadBackupHandle('vault').catch(() => null);
       const auto = localStorage.getItem(KEY_OBSIDIAN_AUTO) === '1' ? 'вкл' : 'выкл';
-      if (obsidianBackupFileHandle) {
-        setObsidianStatus(`Файл: ${obsidianBackupFileHandle.name} · автосохранение ${auto}`);
-      } else if (obsidianVaultHandle) {
-        setObsidianStatus(`Папка: ${obsidianVaultHandle.name} · автосохранение ${auto}`);
+      if (obsidianVaultHandle) {
+        setObsidianStatus(`Папка vault: ${obsidianVaultHandle.name} · бэкап в приложении всегда · vault ${auto}`);
+      } else {
+        setObsidianStatus(`Бэкап в приложении активен · vault ${auto} · для Obsidian — «Поделиться»`);
       }
       document.getElementById('obsidianImportInput').addEventListener('change', async e => {
         const file = e.target.files?.[0];
