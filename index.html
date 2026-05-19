@@ -377,9 +377,9 @@
       </div>
       <div class="backup-section">
         <h2>📓 Бэкап в Obsidian</h2>
-        <p class="backup-status" id="obsidianStatus">Chrome + https. На телефоне: «Выбрать файл» → папка vault → создать или открыть .md</p>
+        <p class="backup-status" id="obsidianStatus">Chrome + https. Лучше «папка vault» — файл в .workout-app-backup/. Закройте заметку бэкапа в Obsidian при сохранении.</p>
+        <button class="btn btn-backup" onclick="pickObsidianVault()">Выбрать папку vault (надёжнее)</button>
         <button class="btn btn-backup" onclick="pickObsidianBackupFile()">Выбрать файл в хранилище</button>
-        <button class="btn btn-backup" onclick="pickObsidianVault()">Выбрать папку (ПК)</button>
         <button class="btn btn-backup" onclick="writeObsidianBackup(true)">Сохранить сейчас</button>
         <button class="btn btn-backup" onclick="downloadObsidianBackup()">Скачать .md</button>
         <label class="check">
@@ -459,6 +459,8 @@
 
     const KEY_OBSIDIAN_AUTO = 'workout-v4-obsidian-auto';
     const OBSIDIAN_FILENAME = 'Тренировки — бэкап.md';
+    const OBSIDIAN_BACKUP_DIR = '.workout-app-backup';
+    const KEY_PENDING_BACKUP = 'workout-pending-backup-md';
     const IDB_NAME = 'workout-obsidian-fs';
     const IDB_STORE = 'handles';
     let obsidianVaultHandle = null;
@@ -784,7 +786,7 @@
     function formatWriteError(e) {
       const m = (e && e.message) ? e.message : String(e);
       if (isStaleStateError(e)) {
-        return 'файл изменился (Obsidian) — нажмите «Сохранить сейчас» ещё раз';
+        return 'Obsidian держит файл открытым — закройте эту заметку, подождите 2 сек и нажмите «Сохранить сейчас»';
       }
       if (/user activation|gesture|aborted/i.test(m)) {
         return 'нажмите «Сохранить сейчас» — браузер требует ваше действие';
@@ -812,26 +814,48 @@
 
     async function writeMarkdownToHandle(fileHandle, md) {
       const payload = new Blob([md], { type: 'text/markdown;charset=utf-8' });
-      const doWrite = async () => {
-        await syncFileHandleFromDisk(fileHandle);
-        const writable = await fileHandle.createWritable();
+      const attempts = 6;
+      let lastErr;
+      for (let i = 0; i < attempts; i++) {
         try {
-          await writable.write(payload);
-        } finally {
-          await writable.close();
+          await syncFileHandleFromDisk(fileHandle);
+          const writable = await fileHandle.createWritable({ keepExistingData: false });
+          try {
+            await writable.write(payload);
+          } finally {
+            await writable.close();
+          }
+          return;
+        } catch (e) {
+          lastErr = e;
+          if (!isStaleStateError(e) || i === attempts - 1) throw e;
+          await new Promise(r => setTimeout(r, 100 + i * 100));
         }
-      };
-      try {
-        await doWrite();
-      } catch (e) {
-        if (!isStaleStateError(e)) throw e;
-        await syncFileHandleFromDisk(fileHandle);
-        await doWrite();
       }
+      throw lastErr;
     }
 
     async function getBackupFileFromDir(dirHandle) {
-      return dirHandle.getFileHandle(OBSIDIAN_FILENAME, { create: true });
+      const sub = await dirHandle.getDirectoryHandle(OBSIDIAN_BACKUP_DIR, { create: true });
+      return sub.getFileHandle(OBSIDIAN_FILENAME, { create: true });
+    }
+
+    async function writeBackupViaDirectory(dirHandle, md, showAlert) {
+      if (!(await ensureWritePermission(dirHandle, showAlert))) {
+        if (!showAlert) return false;
+        throw new Error('доступ к папке не выдан');
+      }
+      const fh = await getBackupFileFromDir(dirHandle);
+      if (!(await ensureWritePermission(fh, showAlert))) {
+        if (!showAlert) return false;
+        throw new Error('доступ к файлу не выдан');
+      }
+      await writeMarkdownToHandle(fh, md);
+      obsidianBackupFileHandle = fh;
+      obsidianVaultHandle = dirHandle;
+      await saveBackupHandle(fh, 'file');
+      await saveBackupHandle(dirHandle, 'vault');
+      return true;
     }
 
     async function hasObsidianBackupTarget() {
@@ -875,7 +899,7 @@
       try {
         obsidianVaultHandle = await showDirectoryPicker({ mode: 'readwrite' });
         await saveBackupHandle(obsidianVaultHandle, 'vault');
-        setObsidianStatus(`Папка: ${obsidianVaultHandle.name}`);
+        setObsidianStatus(`Папка: ${obsidianVaultHandle.name}/${OBSIDIAN_BACKUP_DIR}`);
         await writeObsidianBackup(true);
       } catch (e) {
         if (e.name !== 'AbortError') setObsidianStatus('Не удалось выбрать папку: ' + e.message);
@@ -883,7 +907,10 @@
     }
 
     async function writeObsidianBackup(showAlert) {
-      const md = buildObsidianMarkdown();
+      let md = buildObsidianMarkdown();
+      const pending = localStorage.getItem(KEY_PENDING_BACKUP);
+      if (pending && showAlert) md = pending;
+
       let fileHandle = obsidianBackupFileHandle || await loadBackupHandle('file').catch(() => null);
       let dirHandle = obsidianVaultHandle || await loadBackupHandle('vault').catch(() => null);
 
@@ -897,6 +924,7 @@
       }
 
       const setSaved = (label) => {
+        localStorage.removeItem(KEY_PENDING_BACKUP);
         const t = new Date().toLocaleString('ru');
         setObsidianStatus(`Сохранено: ${label} · ${t}`);
         if (showAlert) alert('Бэкап записан в хранилище Obsidian');
@@ -905,12 +933,37 @@
       const reportFail = (prefix, e, key) => {
         const msg = formatWriteError(e);
         if (/потеряна|заново/i.test(msg) && key) clearBackupHandle(key).catch(() => {});
+        if (!showAlert && isStaleStateError(e)) {
+          localStorage.setItem(KEY_PENDING_BACKUP, md);
+          setObsidianStatus('Автосохранение отложено — закройте заметку в Obsidian и нажмите «Сохранить сейчас»');
+          return;
+        }
         if (!showAlert) {
           setObsidianStatus('Автосохранение: ' + msg);
           return;
         }
         setObsidianStatus(prefix + msg);
       };
+
+      if (dirHandle) {
+        try {
+          const ok = await writeBackupViaDirectory(dirHandle, md, showAlert);
+          if (ok === false) {
+            if (!showAlert) {
+              setObsidianStatus('Автосохранение: нажмите «Сохранить сейчас»');
+              return;
+            }
+          } else {
+            setSaved(`${OBSIDIAN_BACKUP_DIR}/${OBSIDIAN_FILENAME}`);
+            return;
+          }
+        } catch (e) {
+          if (!fileHandle) {
+            reportFail('Ошибка записи: ', e, 'vault');
+            return;
+          }
+        }
+      }
 
       if (fileHandle) {
         try {
@@ -927,43 +980,15 @@
           setSaved(fileHandle.name);
           return;
         } catch (e) {
-          if (!dirHandle) {
-            reportFail('Ошибка записи: ', e, 'file');
-            return;
-          }
-        }
-      }
-
-      if (dirHandle) {
-        try {
-          if (!(await ensureWritePermission(dirHandle, showAlert))) {
-            if (!showAlert) {
-              setObsidianStatus('Автосохранение: нажмите «Сохранить сейчас»');
-              return;
-            }
-            throw new Error('доступ к папке не выдан');
-          }
-          const fh = await getBackupFileFromDir(dirHandle);
-          if (!(await ensureWritePermission(fh, showAlert))) {
-            throw new Error('доступ к файлу в папке не выдан');
-          }
-          await writeMarkdownToHandle(fh, md);
-          obsidianBackupFileHandle = fh;
-          await saveBackupHandle(fh, 'file');
-          obsidianVaultHandle = dirHandle;
-          await saveBackupHandle(dirHandle, 'vault');
-          setSaved(`${OBSIDIAN_FILENAME} (${dirHandle.name})`);
-          return;
-        } catch (e) {
-          reportFail('Ошибка записи: ', e, 'vault');
+          reportFail('Ошибка записи: ', e, 'file');
           return;
         }
       }
 
       if (showAlert) {
-        setObsidianStatus('Сначала «Выбрать файл в хранилище» (на телефоне) или папку на ПК.');
+        setObsidianStatus('Сначала «Выбрать папку vault» или файл в хранилище.');
       } else if (localStorage.getItem(KEY_OBSIDIAN_AUTO) === '1') {
-        setObsidianStatus('Автосохранение: укажите файл в хранилище Obsidian.');
+        setObsidianStatus('Автосохранение: укажите папку vault в Obsidian.');
       }
     }
 
